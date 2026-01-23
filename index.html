@@ -788,24 +788,15 @@ function renderDetail(rows){
   return html;
 }
 function ordersToCsv(orders){
-  let maxP=0; const per=[];
-  for (const o of orders){
-    const produtos=mapToSortedArray(o.produtos);
-    if (produtos.length>maxP) maxP=produtos.length;
-    per.push({id:o.id, nome:o.nome, produtos});
-  }
-  const cols=["id","nome"];
-  for (let i=1;i<=maxP;i++){ cols.push(`produto_${i}`); cols.push(`quantidade_${i}`); }
+  // Export agrupado em 3 colunas: id ; nome ; itens
+  // Itens no formato: "PRODUTO x1 | OUTRO PRODUTO x2"
   const rows=[];
-  for (const o of per){
-    const row={id:o.id, nome:o.nome};
-    for (let i=0;i<maxP;i++){
-      row[`produto_${i+1}`]=o.produtos[i]?o.produtos[i].item:"";
-      row[`quantidade_${i+1}`]=o.produtos[i]?o.produtos[i].qty:"";
-    }
-    rows.push(row);
+  for (const o of orders){
+    const produtos = mapToSortedArray(o.produtos);
+    const itens = produtos.map(p=>`${p.item} x${p.qty}`).join(" | ");
+    rows.push({id:o.id, nome:o.nome, itens});
   }
-  return rowsToDelimited(rows, cols, ";");
+  return rowsToDelimited(rows, ["id","nome","itens"], ";");
 }
 function pickingOrdersToCsv(picking){ return rowsToDelimited(picking, ["produto","quantidade","posicao"], ";"); }
 
