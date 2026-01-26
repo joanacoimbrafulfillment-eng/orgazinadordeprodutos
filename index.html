@@ -374,9 +374,12 @@ function enforceGate(){
   fbAuth.onAuthStateChanged(async (user)=>{
     if (user){
       showGate(false, "Auth: OK ("+(user.email||user.uid)+")");
-      // Auto-load lists after login (if they exist)
+      // Live sync (atualiza todos os utilizadores)
+      try{ startRealtimeSync(); }catch(e){}
+      // Load once (fallback)
       try{ await fbLoadLists(); }catch(e){}
     } else {
+      try{ stopRealtimeSync(); }catch(e){}
       showGate(true, "Auth: não autenticado — faz login para entrar");
     }
   });
@@ -417,6 +420,56 @@ async function fbLoadLists(){
     alert("Erro a carregar da Firebase: "+(err?.message||err));
   }
 }
+
+// ----- Realtime Sync (para atualizar em TODOS os utilizadores) -----
+let fbUnsubMap = null;
+let fbUnsubPos = null;
+let fbSyncStarted = false;
+
+function stopRealtimeSync(){
+  try{ if (fbUnsubMap) fbUnsubMap(); }catch(e){}
+  try{ if (fbUnsubPos) fbUnsubPos(); }catch(e){}
+  fbUnsubMap = null; fbUnsubPos = null; fbSyncStarted = false;
+}
+
+function startRealtimeSync(){
+  requireFirebase();
+  if (!fbAuth.currentUser) return;
+  if (fbSyncStarted) return;
+  fbSyncStarted = true;
+
+  // MAP
+  fbUnsubMap = fbDocRef("map").onSnapshot((snap)=>{
+    if (!snap.exists) return;
+    const d = snap.data() || {};
+    if (Array.isArray(d.rows) && d.rows.length){
+      saveJsonToStorage(MAP_STORAGE_KEY, d.rows);
+      setMap(d.rows, `Firebase (live) — ${d.rows.length} linhas`);
+      const when = d.updatedAt && d.updatedAt.toDate ? d.updatedAt.toDate().toLocaleString() : "";
+      const who = d.updatedBy ? (" por " + d.updatedBy) : "";
+      setFbStatus("fbSyncStatus", "Sync: atualizado (Lista)" + (when?(" • "+when):"") + who);
+      setFbStatus("gateStatus", "Auth: OK ("+(fbAuth.currentUser.email||fbAuth.currentUser.uid)+")");
+    }
+  }, (err)=>{
+    alert("Erro (live) Lista Firebase: " + (err?.message||err));
+  });
+
+  // POS
+  fbUnsubPos = fbDocRef("pos").onSnapshot((snap)=>{
+    if (!snap.exists) return;
+    const d = snap.data() || {};
+    if (Array.isArray(d.rows) && d.rows.length){
+      saveJsonToStorage(POS_STORAGE_KEY, d.rows);
+      setPos(d.rows, `Firebase (live) — ${d.rows.length} linhas`);
+      const when = d.updatedAt && d.updatedAt.toDate ? d.updatedAt.toDate().toLocaleString() : "";
+      const who = d.updatedBy ? (" por " + d.updatedBy) : "";
+      setFbStatus("fbSyncStatus", "Sync: atualizado (Posições)" + (when?(" • "+when):"") + who);
+    }
+  }, (err)=>{
+    alert("Erro (live) Posições Firebase: " + (err?.message||err));
+  });
+}
+
 
 async function fbPushLists(){
   requireFirebase();
