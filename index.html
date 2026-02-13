@@ -64,7 +64,13 @@
 </div>
 
 <div id="appContent">
-  <h1>Organizador • Encomendas + Sales/Cross</h1>
+  <div style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap">
+  <h1 style="margin:0">Organizador • Encomendas + Sales/Cross</h1>
+  <div style="display:flex;gap:8px;align-items:center">
+    <button id="mainLogout" title="Terminar sessão">Logout</button>
+    <span class="small muted" id="mainUser"></span>
+  </div>
+</div>
   <p class="small">
     ✅ Ignora qualquer item que contenha <code>Delivery</code>. &nbsp;|&nbsp;
     ✅ Exportação usa <code>;</code> (Excel/PT abre em colunas). &nbsp;|&nbsp;
@@ -104,6 +110,15 @@
         <button id="resetPos">Voltar às posições padrão</button>
         <span class="small" id="posStatus"></span>
       </div>
+
+      <div class="row" style="margin-top:10px">
+        <label class="small" style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="useWarehouseFirst" checked />
+          <span><strong>Usar Armazém como fonte principal de posições</strong> (procura primeiro nas posições de <em>picking</em> do armazém; se não encontrar, usa esta lista manual)</span>
+        </label>
+        <span class="small muted" id="whStatus">Armazém: —</span> <button class="btn" type="button" id="whLoginBtn" onclick="whPromptLogin()">Login Armazém</button> <button class="btn" type="button" id="whLogoutBtn" onclick="whWarehouseLogout()">Logout Armazém</button>
+      </div>
+
 <div class="card" style="margin-top:12px">
   <h3>Firebase (opcional) — guardar/carregar listas</h3>
   <p style="margin-top:6px">
@@ -244,6 +259,80 @@ const DEFAULT_FIREBASE_CONFIG = {
 
 let fbApp=null, fbDb=null, fbAuth=null;
 
+// ===== Warehouse (Armazém) Firebase (posicoeswh) — lookup de posições de picking =====
+const WH_FIREBASE_CONFIG = {
+  apiKey: "AIzaSyCFnPU0CZPtcMqPi_aq2XJVQodIgWZV4h0",
+  authDomain: "posicoeswh.firebaseapp.com",
+  projectId: "posicoeswh",
+  storageBucket: "posicoeswh.firebasestorage.app",
+  messagingSenderId: "234070238679",
+  appId: "1:234070238679:web:4ef11f08523c3b71055792",
+};
+
+let whApp=null, whDb=null, whAuth=null;
+const whCache = {
+  // norm(productName) -> "A1, A2" | "" (resolved empty means not found)
+  posByName: new Map(),
+  // productId -> {id,name}
+  productByName: new Map(),
+  // positionId -> code
+  positionCodeById: new Map(),
+};
+
+function setWhStatus(msg){
+  const el=document.getElementById("whStatus");
+  if (el) el.textContent = "Armazém: " + (msg||"—");
+}
+
+function isWarehouseReady(){
+  return !!(whApp && whDb && whAuth);
+}
+
+function initWarehouseFirebase(){
+  try{
+    if (!window.firebase) { setWhStatus("Firebase libs não carregadas"); return; }
+    // named app so it doesn't collide with the organizer app
+    try{
+      whApp = firebase.app("warehouseApp");
+    }catch{
+      whApp = firebase.initializeApp(WH_FIREBASE_CONFIG, "warehouseApp");
+    }
+    whAuth = whApp.auth();
+    whDb = whApp.firestore();
+    setWhStatus("config OK (sem sessão)");
+  }catch(e){
+    console.warn("Warehouse init failed", e);
+    setWhStatus("erro a iniciar");
+  }
+
+  // NOTE: end initWarehouseFirebase so helpers below are global (for inline onclick).
+}
+
+async function whPromptLogin(){
+  try{
+    if(!isWarehouseReady()) initWarehouseFirebase();
+    const email = window.prompt("Email do Armazém (posicoeswh):");
+    if(!email) return;
+    const pass = window.prompt("Password do Armazém:");
+    if(!pass) return;
+    await whAuth.signInWithEmailAndPassword(email.trim(), pass);
+    setWhStatus("sessão ativa (" + (whAuth.currentUser?.email||"") + ")");
+    // limpar caches negativos
+    whCache.posByName = new Map();
+    whCache.productByName = new Map();
+  }catch(e){
+    console.warn("Warehouse login failed", e);
+    setWhStatus("login falhou");
+  }
+}
+async function whWarehouseLogout(){
+  try{
+    if(whAuth) await whAuth.signOut();
+  }catch(e){ console.warn(e); }
+  setWhStatus("sem sessão");
+}
+
+
 function getSavedFbConfig(){
   try{ return JSON.parse(localStorage.getItem(FB_CFG_KEY)||""); }catch{ return null; }
 }
@@ -307,6 +396,17 @@ async function fbLogin(){
   if (!email || !pass){ alert("Preenche email e password."); return; }
   try{
     await fbAuth.signInWithEmailAndPassword(email, pass);
+    // Try to sign in to Warehouse app with same credentials (best effort)
+    try{
+      if (!isWarehouseReady()) initWarehouseFirebase();
+      if (isWarehouseReady()){
+        await whAuth.signInWithEmailAndPassword(email, pass);
+        setWhStatus('sessão ativa');
+      }
+    }catch(e){
+      console.warn('Warehouse login failed', e);
+      setWhStatus('sem acesso (login falhou)');
+    }
   }catch(err){
     alert("Login falhou: "+(err?.message||err));
   }
@@ -315,15 +415,24 @@ async function fbLogin(){
 async function fbLogout(){
   if (!isFirebaseReady()) return;
   try{ await fbAuth.signOut(); }catch{}
+  // Also sign out warehouse session (best effort)
+  try{ if (isWarehouseReady()) await whAuth.signOut(); }catch{}
+  try{ setWhStatus('sem sessão'); }catch{}
 }
 
 function watchAuth(){
   if (!isFirebaseReady()) return;
   fbAuth.onAuthStateChanged((user)=>{
+    const mu=document.getElementById("mainUser");
+    const ml=document.getElementById("mainLogout");
     if (user){
       setFbStatus("fbAuthStatus", "Auth: OK ("+ (user.email||user.uid) +")");
+      if (mu) mu.textContent = (user.email||user.uid);
+      if (ml) ml.disabled = false;
     } else {
       setFbStatus("fbAuthStatus", "Auth: não autenticado (depois do 1º login fica guardado neste browser)");
+      if (mu) mu.textContent = "";
+      if (ml) ml.disabled = true;
     }
   });
 }
@@ -667,6 +776,136 @@ function getPosicao(prodUniform){
   return "";
 }
 
+
+// ===== Warehouse lookup helpers =====
+function normNameKey(s){ return norm(s); }
+
+async function whGetProductByName(name){
+  const key = normNameKey(name);
+  if (!key) return null;
+  if (whCache.productByName.has(key)) return whCache.productByName.get(key);
+  if (!isWarehouseReady() || !whAuth.currentUser){
+    // sem sessão: não fazer cache negativo (para permitir funcionar após login)
+    return null;
+  }
+
+  let found = null;
+  try{
+    const col = whDb.collection("products");
+
+    // 1) tentativa exacta (rápida)
+    const q1 = await col.where("name","==", name).limit(5).get();
+    if (!q1.empty){
+      const d=q1.docs[0];
+      found = { id:d.id, ...d.data() };
+    } else {
+      // 2) prefix search por name (escala melhor do que 'limit(500)')
+      // Nota: Firestore é case-sensitive; por isso fazemos match final por normalização.
+      const q2 = await col.orderBy("name").startAt(name).endAt(name + "\uf8ff").limit(50).get();
+      if (!q2.empty){
+        for (const d of q2.docs){
+          const data = d.data()||{};
+          if (normNameKey(data.name) === key){
+            found = { id:d.id, ...data };
+            break;
+          }
+        }
+      }
+
+      // 3) fallback final: se não houver match e o prefix search falhar (ex.: variação de maiúsculas),
+      // tenta uma janela maior mas ainda limitada
+      if (!found){
+        const q3 = await col.orderBy("name").limit(1000).get();
+        for (const d of q3.docs){
+          const data = d.data()||{};
+          if (normNameKey(data.name) === key){
+            found = { id:d.id, ...data };
+            break;
+          }
+        }
+      }
+    }
+  }catch(e){
+    console.warn("whGetProductByName failed", e);
+  }
+  whCache.productByName.set(key, found);
+  return found;
+}
+
+async function whGetPositionCodeById(positionId){
+  if (!positionId) return "";
+  if (whCache.positionCodeById.has(positionId)) return whCache.positionCodeById.get(positionId) || "";
+  if (!isWarehouseReady()) { whCache.positionCodeById.set(positionId, ""); return ""; }
+  let code="";
+  try{
+    const snap = await whDb.collection("positions").doc(positionId).get();
+    if (snap.exists){
+      const data=snap.data()||{};
+      code = (data.code||"").toString();
+    }
+  }catch(e){
+    console.warn("whGetPositionCodeById failed", e);
+  }
+  whCache.positionCodeById.set(positionId, code);
+  return code;
+}
+
+async function whGetPickingPositionsByProductName(name){
+  const key = normNameKey(name);
+  if (!key) return "";
+  if (whCache.posByName.has(key)) return whCache.posByName.get(key) || "";
+  if (!isWarehouseReady() || !whAuth.currentUser){
+    // Sem sessão no armazém: não fazer cache negativo, para permitir funcionar após login
+    return "";
+  }
+  let out="";
+  try{
+    const prod = await whGetProductByName(name);
+    if (!prod?.id){ whCache.posByName.set(key,""); return ""; }
+    const snap = await whDb.collection("stockItems")
+      .where("productId","==", prod.id)
+      .where("slotType","==", "PICKING")
+      .limit(10)
+      .get();
+    if (!snap.empty){
+      const posIds = Array.from(new Set(snap.docs.map(d=> (d.data()||{}).positionId).filter(Boolean)));
+      const codes = [];
+      for (const pid of posIds){
+        const c = await whGetPositionCodeById(pid);
+        if (c) codes.push(c);
+      }
+      // Stable output
+      out = codes.sort((a,b)=>a.localeCompare(b,"pt",{sensitivity:"base"})).join(", ");
+    }
+  }catch(e){
+    console.warn("whGetPickingPositionsByProductName failed", e);
+  }
+  whCache.posByName.set(key, out || "");
+  return out || "";
+}
+
+async function resolvePosicaoCascata(prodUniform){
+  // 1) warehouse (if enabled)
+  const useWh = document.getElementById("useWarehouseFirst")?.checked;
+  if (useWh){
+    if (!whAuth?.currentUser){ setWhStatus("sem sessão — clica Login Armazém"); }
+    const wh = await whGetPickingPositionsByProductName(prodUniform);
+    if (wh) return wh;
+  }
+  // 2) fallback manual POS list
+  return getPosicao(prodUniform) || "";
+}
+
+async function applyCascadedPositionsToPicking(pickingArr){
+  // pickingArr: [{produto, quantidade, posicao}]
+  const updated = [];
+  for (const row of pickingArr){
+    const pos = await resolvePosicaoCascata(row.produto);
+    updated.push({ ...row, posicao: pos });
+  }
+  return updated;
+}
+
 // Code index (col C)
 function buildCodeIndex(){
   const idx=new Map();
@@ -785,10 +1024,13 @@ function aggregateByOrder(rows){
   }
   return Array.from(orders.values()).sort((a,b)=>parseInt(a.id,10)-parseInt(b.id,10));
 }
-function aggregatePickingWithPos(rows){
+function aggregatePickingBase(rows){
   const agg=new Map();
   for (const r of rows) if (r.status==="ok") agg.set(r.nome_uniformizado, (agg.get(r.nome_uniformizado)||0)+Number(r.qty||0));
-  return Array.from(agg.entries()).map(([produto, quantidade])=>({produto, quantidade, posicao:getPosicao(produto)})).sort((a,b)=>a.produto.localeCompare(b.produto));
+  // posicao vai ser resolvida em cascata (armazém -> lista manual)
+  return Array.from(agg.entries())
+    .map(([produto, quantidade])=>({produto, quantidade, posicao:""}))
+    .sort((a,b)=>a.produto.localeCompare(b.produto));
 }
 function renderOrders(orders){
   let html="<h2>Agrupado por ID + Nome</h2>";
@@ -1141,14 +1383,27 @@ document.getElementById("resetPos").addEventListener("click", ()=>{
 
 // Orders actions
 let lastOrdersRows=[], lastOrdersAgg=[], lastOrdersPicking=[];
-document.getElementById("ordersRun").addEventListener("click", ()=>{
+document.getElementById("ordersRun").addEventListener("click", async ()=>{
   const text=document.getElementById("ordersInput").value||"";
   lastOrdersRows = processOrders(text);
   lastOrdersAgg = aggregateByOrder(lastOrdersRows);
-  lastOrdersPicking = aggregatePickingWithPos(lastOrdersRows);
+  // Render imediato sem posições; depois resolve em cascata (Armazém -> Lista manual)
+  lastOrdersPicking = aggregatePickingBase(lastOrdersRows);
 
   document.getElementById("ordersOut").innerHTML = renderOrders(lastOrdersAgg);
   document.getElementById("ordersPicking").innerHTML = renderPickingOrders(lastOrdersPicking);
+
+  try{
+    document.getElementById("ordersPicking").insertAdjacentHTML(
+      "afterbegin",
+      `<div class="muted small" id="whPickNotice">A resolver posições (Armazém → Lista manual)…</div>`
+    );
+    const resolved = await applyCascadedPositionsToPicking(lastOrdersPicking);
+    lastOrdersPicking = resolved;
+    document.getElementById("ordersPicking").innerHTML = renderPickingOrders(lastOrdersPicking);
+  }catch(e){
+    console.warn("Position cascade failed", e);
+  }
 
   const maps = renderGlobalNF_IGN(lastOrdersRows);
   document.getElementById("ordersNotFound").innerHTML = maps.nfHtml;
@@ -1232,7 +1487,10 @@ try{ wireFirebaseUi(); }catch(e){}
 // Auto-init Firebase on page load (uses embedded/saved config)
 try{ initFirebaseFromTextarea(); }catch(e){}
 try{ if (isFirebaseReady()) watchAuth(); }catch(e){}
+// Auto-init Warehouse Firebase (posicoeswh)
+try{ initWarehouseFirebase(); }catch(e){}
 try{ wireGateUi(); }catch(e){}
+try{ document.getElementById("mainLogout")?.addEventListener("click", async ()=>{ await fbLogout(); }); }catch(e){}
 try{ enforceGate(); }catch(e){}
 </script>
 </div>
