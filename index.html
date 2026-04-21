@@ -238,6 +238,14 @@
         </div>
         <div id="salesPicking"></div>
         <div id="salesNotFound"></div>
+        <div id="salesSheetsExport" style="display:none;margin-top:12px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+            <label class="small"><strong>📋 Sheets Export (Sales)</strong> — colar diretamente no Google Sheets</label>
+            <button id="copySalesSheets" class="small" style="padding:4px 10px;font-size:12px;background:#e8f5e9;border:1px solid #81c784;border-radius:8px;cursor:pointer;">Copiar</button>
+          </div>
+          <textarea id="salesSheetsText" rows="8" style="background:#f9fff9;border-color:#aad4aa;font-family:ui-monospace,monospace;font-size:12px;" readonly></textarea>
+          <div class="small muted" style="margin-top:4px;">Formato: <strong>data | produto | qty</strong> — cada linha cola em 3 células separadas no Sheets</div>
+        </div>
       </div>
 
       <div class="section">
@@ -251,6 +259,14 @@
         </div>
         <div id="crossOut"></div>
         <div id="crossByProduct"></div>
+        <div id="crossSheetsExport" style="display:none;margin-top:12px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+            <label class="small"><strong>📋 Sheets Export (Cross)</strong> — colar diretamente no Google Sheets</label>
+            <button id="copyCrossSheets" class="small" style="padding:4px 10px;font-size:12px;background:#e8f5e9;border:1px solid #81c784;border-radius:8px;cursor:pointer;">Copiar</button>
+          </div>
+          <textarea id="crossSheetsText" rows="8" style="background:#f9fff9;border-color:#aad4aa;font-family:ui-monospace,monospace;font-size:12px;" readonly></textarea>
+          <div class="small muted" style="margin-top:4px;">Formato: <strong>data | produto | qty</strong> — cada linha cola em 3 células separadas no Sheets</div>
+        </div>
       </div>
     </div>
   </div>
@@ -1212,6 +1228,16 @@ function renderSalesNF(nf){
 }
 function salesToCsv(picking){ return rowsToDelimited(picking, ["produto","quantidade"], ";"); }
 
+function buildSheetsExport(picking){
+  // picking: [{produto, quantidade}] or [{produto, quantidade, posicao}]
+  const today = new Date();
+  const dateStr = today.toLocaleDateString('pt-PT', {day:'2-digit', month:'2-digit', year:'numeric'});
+  return picking
+    .filter(r => r.produto && r.produto !== "Não encontrado")
+    .map(r => `${dateStr}\t${r.produto}\t${r.quantidade}`)
+    .join('\n');
+}
+
 // ---------------- CROSS ----------------
 function parseCrossTokens(text){
   return (text??"").toString().replace(/[,;]/g," ").split(/\s+/).map(t=>normCode(t)).filter(Boolean);
@@ -1523,17 +1549,32 @@ document.getElementById("salesRun").addEventListener("click", ()=>{
   document.getElementById("salesPicking").innerHTML = renderSalesPicking(agg.picking);
   document.getElementById("salesNotFound").innerHTML = renderSalesNF(agg.notFound);
   document.getElementById("salesStatus").textContent = `Produtos: ${agg.picking.length} | Não encontrados: ${agg.notFound.length}`;
+  // Sheets export
+  const sheetsText = buildSheetsExport(agg.picking);
+  document.getElementById("salesSheetsText").value = sheetsText;
+  document.getElementById("salesSheetsExport").style.display = agg.picking.length ? "" : "none";
 });
 document.getElementById("salesClear").addEventListener("click", ()=>{
   document.getElementById("salesInput").value="";
   document.getElementById("salesPicking").innerHTML="";
   document.getElementById("salesNotFound").innerHTML="";
   document.getElementById("salesStatus").textContent="";
+  document.getElementById("salesSheetsExport").style.display="none";
+  document.getElementById("salesSheetsText").value="";
   lastSalesPicking=[];
 });
 document.getElementById("downloadSalesCsv").addEventListener("click", ()=>{
   if (!lastSalesPicking.length){ alert("Primeiro gera a picking (Sales)."); return; }
   downloadText(salesToCsv(lastSalesPicking), "sales_picking_list.csv", "text/csv;charset=utf-8");
+});
+
+document.getElementById("copySalesSheets").addEventListener("click", ()=>{
+  const ta = document.getElementById("salesSheetsText");
+  navigator.clipboard.writeText(ta.value).then(()=>{
+    const btn = document.getElementById("copySalesSheets");
+    const orig = btn.textContent; btn.textContent="✅ Copiado!";
+    setTimeout(()=>{ btn.textContent=orig; }, 1800);
+  }).catch(()=>{ ta.select(); document.execCommand("copy"); });
 });
 
 // Cross actions
@@ -1547,17 +1588,32 @@ document.getElementById("crossRun").addEventListener("click", ()=>{
   const ok=res.rows.filter(r=>r.status==="ok").length;
   const nf=res.rows.filter(r=>r.status==="nf").length;
   document.getElementById("crossStatus").textContent = `Códigos: ${res.rows.length} | Encontrados: ${ok} | Não encontrados: ${nf}`;
+  // Sheets export (usa byProduct — agrupado)
+  const sheetsText = buildSheetsExport(res.byProduct);
+  document.getElementById("crossSheetsText").value = sheetsText;
+  document.getElementById("crossSheetsExport").style.display = res.byProduct.length ? "" : "none";
 });
 document.getElementById("crossClear").addEventListener("click", ()=>{
   document.getElementById("crossInput").value="";
   document.getElementById("crossOut").innerHTML="";
   document.getElementById("crossByProduct").innerHTML="";
   document.getElementById("crossStatus").textContent="";
+  document.getElementById("crossSheetsExport").style.display="none";
+  document.getElementById("crossSheetsText").value="";
   lastCrossRows=[];
 });
 document.getElementById("downloadCrossCsv").addEventListener("click", ()=>{
   if (!lastCrossRows.length){ alert("Primeiro processa o Cross."); return; }
   downloadText(crossToCsv(lastCrossRows), "cross_codigos.csv", "text/csv;charset=utf-8");
+});
+
+document.getElementById("copyCrossSheets").addEventListener("click", ()=>{
+  const ta = document.getElementById("crossSheetsText");
+  navigator.clipboard.writeText(ta.value).then(()=>{
+    const btn = document.getElementById("copyCrossSheets");
+    const orig = btn.textContent; btn.textContent="✅ Copiado!";
+    setTimeout(()=>{ btn.textContent=orig; }, 1800);
+  }).catch(()=>{ ta.select(); document.execCommand("copy"); });
 });
 
 
